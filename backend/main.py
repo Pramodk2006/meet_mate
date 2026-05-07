@@ -17,7 +17,8 @@ app = FastAPI(
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "https://meetmate.vercel.app", "https://meetmate-ai.vercel.app"],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -42,6 +43,8 @@ app.include_router(workspaces.router, prefix="/api/v1/workspaces",  tags=["works
 app.include_router(meetings.router,   prefix="/api/v1/meetings",    tags=["meetings"])
 app.include_router(chat.router,       prefix="/api/v1/chat",        tags=["chat"])
 app.include_router(tasks.router,      prefix="/api/v1/tasks",       tags=["tasks"])
+from backend.api.routers import export
+app.include_router(export.router,     prefix="/api/v1/export",      tags=["export"])
 
 
 @app.get("/health")

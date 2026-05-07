@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { fetchMeeting, fetchWorkspaceMembers, updateTask, askChat, exportTasksToCSV } from '@/lib/api';
+import { fetchMeeting, fetchWorkspaceMembers, updateTask, askChat, exportTasksToCSV, exportToNotion, sendTaskEmails } from '@/lib/api';
 
 const PRIORITY_CONFIG: Record<string, { label: string; color: string; dot: string }> = {
     high: { label: 'High', color: 'bg-red-100 text-red-700 border-red-200', dot: 'bg-red-500' },
@@ -31,11 +31,35 @@ export default function MeetingDetailPage() {
             try {
                 const meetingData = await fetchMeeting(params.meetingId);
                 setMeeting(meetingData);
-                setTasks(meetingData.tasks || []);
+                let loadedTasks: any[] = meetingData.tasks || [];
+
+                let membersData: any[] = [];
                 if (meetingData.workspace_id) {
-                    const membersData = await fetchWorkspaceMembers(meetingData.workspace_id).catch(() => []);
+                    membersData = await fetchWorkspaceMembers(meetingData.workspace_id).catch(() => []);
                     setMembers(membersData);
                 }
+
+                // Auto-assign tasks whose raw_assignee_name matches a workspace member
+                if (membersData.length > 0) {
+                    loadedTasks = await Promise.all(loadedTasks.map(async (task: any) => {
+                        if (!task.assigned_to_user_id && task.raw_assignee_name) {
+                            const rawName = task.raw_assignee_name.toLowerCase().trim();
+                            const match = membersData.find((m: any) => {
+                                const full = (m.user?.full_name || '').toLowerCase();
+                                const parts = full.split(' ');
+                                return full === rawName || parts[0] === rawName || parts[parts.length - 1] === rawName;
+                            });
+                            if (match) {
+                                try {
+                                    await updateTask(task.id, { assigned_to_user_id: match.user_id });
+                                    return { ...task, assigned_to_user_id: match.user_id };
+                                } catch { }
+                            }
+                        }
+                        return task;
+                    }));
+                }
+                setTasks(loadedTasks);
             } catch (err: any) {
                 setError(err.message || 'Failed to load meeting');
             } finally {
@@ -101,17 +125,49 @@ export default function MeetingDetailPage() {
                         <div className="flex items-center gap-3 mb-1">
                             <h1 className="text-2xl md:text-3xl font-bold text-gray-900">{meeting.title}</h1>
                             <span className={`text-sm px-3 py-1 rounded-full font-medium capitalize ${meeting.status === 'completed' ? 'bg-emerald-100 text-emerald-700' :
-                                    meeting.status === 'processing' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'
+                                meeting.status === 'processing' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'
                                 }`}>{meeting.status}</span>
                         </div>
                         <p className="text-gray-400 text-sm">
                             {new Date(meeting.created_at).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
                         </p>
                     </div>
-                    <button onClick={() => exportTasksToCSV(tasks, meeting.title)} disabled={tasks.length === 0}
-                        className="flex items-center gap-2 text-sm bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-xl shadow-sm transition whitespace-nowrap disabled:opacity-40">
-                        ⬇️ Export Tasks CSV
-                    </button>
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <button onClick={async () => {
+                            try {
+                                const res = await sendTaskEmails(meeting.id);
+                                const sentCount = res.sent_to?.length ?? 0;
+                                const unassigned = res.unassigned_tasks ?? 0;
+                                let msg = `✅ Emails sent to ${sentCount} assignee(s).`;
+                                if (unassigned > 0) msg += ` ${unassigned} task(s) unassigned.`;
+                                alert(msg);
+                            } catch (e: any) {
+                                alert(e.message || 'Failed to send emails');
+                            }
+                        }} disabled={tasks.length === 0 || meeting?.status !== 'completed'}
+                            className="flex items-center gap-2 text-sm bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-xl shadow-sm transition whitespace-nowrap disabled:opacity-40">
+                            📧 Email Assignees
+                        </button>
+                        <button onClick={() => exportTasksToCSV(tasks, meeting.title)} disabled={tasks.length === 0}
+                            className="flex items-center gap-2 text-sm bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-xl shadow-sm transition whitespace-nowrap disabled:opacity-40">
+                            ⬇️ CSV
+                        </button>
+                        <button onClick={async () => {
+                            try {
+                                await exportToNotion(meeting.id);
+                                alert('Exported to Notion successfully!');
+                                // Refresh to get the new ticket URLs
+                                const fresh = await fetchMeeting(meeting.id);
+                                setTasks(fresh.tasks || []);
+                            } catch (e: any) {
+                                alert(e.message || 'Failed to export to Notion');
+                            }
+                        }} disabled={tasks.length === 0}
+                            className="flex items-center gap-2 text-sm bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-xl shadow-sm transition whitespace-nowrap disabled:opacity-40">
+                            📓 Notion
+                        </button>
+
+                    </div>
                 </div>
             </div>
 
@@ -197,7 +253,7 @@ export default function MeetingDetailPage() {
                         return (
                             <div key={priority}>
                                 <div className={`px-5 py-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider ${priority === 'high' ? 'bg-red-50 text-red-600' :
-                                        priority === 'medium' ? 'bg-yellow-50 text-yellow-600' : 'bg-green-50 text-green-600'
+                                    priority === 'medium' ? 'bg-yellow-50 text-yellow-600' : 'bg-green-50 text-green-600'
                                     }`}>
                                     <span className={`w-2 h-2 rounded-full ${pc.dot}`}></span>
                                     {priority} Priority ({priorityTasks.length})

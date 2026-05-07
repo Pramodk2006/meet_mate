@@ -1,6 +1,7 @@
 from uuid import UUID
 import json
 import logging
+from datetime import datetime
 from groq import AsyncGroq
 from sqlalchemy import select
 
@@ -91,10 +92,20 @@ async def process_meeting_transcript(meeting_id: UUID, transcript_text: str):
                 # Add Tasks
                 tasks = extracted_data.get("tasks", [])
                 for task_item in tasks:
+                    deadline_str = task_item.get("deadline")
+                    deadline = None
+                    if deadline_str:
+                        try:
+                            # Try parsing the ISO date format
+                            deadline = datetime.strptime(deadline_str, "%Y-%m-%d").date()
+                        except ValueError:
+                            pass
+                            
                     new_task = Task(
                         meeting_id=meeting.id,
                         description=task_item.get("description"),
                         raw_assignee_name=task_item.get("assignee"),
+                        deadline=deadline,
                         status="pending",
                         priority=task_item.get("priority", "medium"),
                     )

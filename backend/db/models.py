@@ -37,6 +37,7 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(String, nullable=False)
     password_hash: Mapped[str] = mapped_column(String, nullable=False)
     avatar_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    trello_member_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Relationships

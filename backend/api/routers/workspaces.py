@@ -10,8 +10,10 @@ from backend.db.models import Workspace, WorkspaceMember, User, Role
 from backend.schemas.pydantic_models import (
     WorkspaceCreate, WorkspaceResponse,
     InviteMemberRequest, WorkspaceMemberResponse,
+    SetTrelloRequest,
 )
 from backend.services.auth import get_current_user
+from backend.services.integrations import lookup_trello_member_id
 
 router = APIRouter()
 
@@ -88,7 +90,8 @@ async def invite_member(
     if mem_result.scalars().first():
         raise HTTPException(status_code=400, detail="User is already a member of this workspace")
 
-    new_member = WorkspaceMember(workspace_id=workspace_id, user_id=user.id, role=Role.member)
+    requested_role = Role.manager if invite_req.role == "manager" else Role.member
+    new_member = WorkspaceMember(workspace_id=workspace_id, user_id=user.id, role=requested_role)
     db.add(new_member)
     await db.commit()
 
@@ -118,3 +121,43 @@ async def list_members(
     )
     result = await db.execute(stmt)
     return result.scalars().all()
+
+
+@router.patch("/{workspace_id}/members/{user_id}/trello")
+async def set_member_trello_id(
+    workspace_id: UUID,
+    user_id: UUID,
+    req: SetTrelloRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Look up the Trello member ID for a given Trello username and store it
+    on the user record so cards can be auto-assigned when syncing to Trello.
+    """
+    mem_result = await db.execute(
+        select(WorkspaceMember).where(
+            WorkspaceMember.workspace_id == workspace_id,
+            WorkspaceMember.user_id == user_id,
+        )
+    )
+    if not mem_result.scalars().first():
+        raise HTTPException(status_code=404, detail="User not found in this workspace")
+
+    trello_id = await lookup_trello_member_id(req.trello_username)
+
+    user_result = await db.execute(select(User).where(User.id == user_id))
+    user = user_result.scalars().first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.trello_member_id = trello_id
+    await db.commit()
+
+    return {
+        "user_id": str(user_id),
+        "full_name": user.full_name,
+        "trello_username": req.trello_username,
+        "trello_member_id": trello_id,
+    }
+

@@ -14,6 +14,7 @@ class UserCreate(UserBase):
 
 class UserResponse(UserBase):
     id: UUID
+    trello_member_id: Optional[str] = None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
@@ -42,6 +43,13 @@ class WorkspaceMemberResponse(BaseModel):
 
 class InviteMemberRequest(BaseModel):
     email: EmailStr
+    role: str = "member"
+
+class SetTrelloRequest(BaseModel):
+    trello_username: str
+
+class TrelloExportRequest(BaseModel):
+    list_id: str
 
 # --- Task Schemas ---
 class TaskBase(BaseModel):

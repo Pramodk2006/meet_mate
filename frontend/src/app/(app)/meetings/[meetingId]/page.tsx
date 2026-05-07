@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { fetchMeeting, fetchWorkspaceMembers, updateTask, askChat, exportTasksToCSV } from '@/lib/api';
+import { fetchMeeting, fetchWorkspaceMembers, updateTask, askChat, exportTasksToCSV, exportToNotion, sendTaskEmails, getTrelloBoards, getTrelloBoardLists, syncTasksToTrello } from '@/lib/api';
 import {
     ChevronLeft,
     Download,
@@ -21,7 +21,10 @@ import {
     ExternalLink,
     User,
     Send,
-    ClipboardList
+    ClipboardList,
+    BookOpen,
+    ChevronDown,
+    LayoutList,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -43,6 +46,18 @@ export default function MeetingDetailPage() {
     const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'ai'; content: string }[]>([]);
     const [chatInput, setChatInput] = useState('');
     const [chatLoading, setChatLoading] = useState(false);
+    const [notionExporting, setNotionExporting] = useState(false);
+    const [notionMsg, setNotionMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+    const [emailSending, setEmailSending] = useState(false);
+    const [emailMsg, setEmailMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+    const [showTrello, setShowTrello] = useState(false);
+    const [trelloBoards, setTrelloBoards] = useState<{ id: string; name: string }[]>([]);
+    const [trelloBoardId, setTrelloBoardId] = useState('');
+    const [trelloLists, setTrelloLists] = useState<{ id: string; name: string }[]>([]);
+    const [trelloListId, setTrelloListId] = useState('');
+    const [trelloLoading, setTrelloLoading] = useState(false);
+    const [trelloSyncing, setTrelloSyncing] = useState(false);
+    const [trelloMsg, setTrelloMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
     const chatEndRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -51,11 +66,35 @@ export default function MeetingDetailPage() {
             try {
                 const meetingData = await fetchMeeting(params.meetingId);
                 setMeeting(meetingData);
-                setTasks(meetingData.tasks || []);
+                let loadedTasks: any[] = meetingData.tasks || [];
+
+                let membersData: any[] = [];
                 if (meetingData.workspace_id) {
-                    const membersData = await fetchWorkspaceMembers(meetingData.workspace_id).catch(() => []);
+                    membersData = await fetchWorkspaceMembers(meetingData.workspace_id).catch(() => []);
                     setMembers(membersData);
                 }
+
+                // Auto-assign tasks whose raw_assignee_name matches a workspace member
+                if (membersData.length > 0) {
+                    loadedTasks = await Promise.all(loadedTasks.map(async (task: any) => {
+                        if (!task.assigned_to_user_id && task.raw_assignee_name) {
+                            const rawName = task.raw_assignee_name.toLowerCase().trim();
+                            const match = membersData.find((m: any) => {
+                                const full = (m.user?.full_name || '').toLowerCase();
+                                const parts = full.split(' ');
+                                return full === rawName || parts[0] === rawName || parts[parts.length - 1] === rawName;
+                            });
+                            if (match) {
+                                try {
+                                    await updateTask(task.id, { assigned_to_user_id: match.user_id });
+                                    return { ...task, assigned_to_user_id: match.user_id };
+                                } catch { }
+                            }
+                        }
+                        return task;
+                    }));
+                }
+                setTasks(loadedTasks);
             } catch (err: any) {
                 setError(err.message || 'Failed to load meeting');
             } finally {
@@ -79,6 +118,92 @@ export default function MeetingDetailPage() {
             setTasks(fresh.tasks || []);
         } finally {
             setUpdatingTask(null);
+        }
+    };
+
+    const handleNotionExport = async () => {
+        setNotionExporting(true);
+        setNotionMsg(null);
+        try {
+            const res = await exportToNotion(params.meetingId);
+            setNotionMsg({ type: 'ok', text: res.message || 'Tasks exported to Notion!' });
+            // Refresh tasks so Ticket links appear
+            const fresh = await fetchMeeting(params.meetingId);
+            setTasks(fresh.tasks || []);
+        } catch (err: any) {
+            setNotionMsg({ type: 'err', text: err.message || 'Notion export failed' });
+        } finally {
+            setNotionExporting(false);
+        }
+    };
+
+    const handleEmailTasks = async () => {
+        setEmailSending(true);
+        setEmailMsg(null);
+        try {
+            const res = await sendTaskEmails(params.meetingId);
+            const sentCount = res.sent_to?.length ?? 0;
+            const failedCount = Object.keys(res.failed ?? {}).length;
+            const unassigned = res.unassigned_tasks ?? 0;
+            let text = `Emails sent to ${sentCount} assignee(s).`;
+            if (unassigned > 0) text += ` ${unassigned} task(s) unassigned.`;
+            if (failedCount > 0) text += ` ${failedCount} delivery failure(s).`;
+            setEmailMsg({ type: failedCount > 0 ? 'err' : 'ok', text });
+        } catch (err: any) {
+            setEmailMsg({ type: 'err', text: err.message || 'Failed to send emails' });
+        } finally {
+            setEmailSending(false);
+        }
+    };
+
+    const handleOpenTrello = async () => {
+        setShowTrello(v => !v);
+        if (!showTrello && trelloBoards.length === 0) {
+            setTrelloLoading(true);
+            setTrelloMsg(null);
+            try {
+                const boards = await getTrelloBoards();
+                setTrelloBoards(boards);
+                if (boards.length > 0) {
+                    setTrelloBoardId(boards[0].id);
+                    const lists = await getTrelloBoardLists(boards[0].id);
+                    setTrelloLists(lists);
+                    if (lists.length > 0) setTrelloListId(lists[0].id);
+                }
+            } catch (err: any) {
+                setTrelloMsg({ type: 'err', text: err.message || 'Failed to load Trello boards' });
+            } finally {
+                setTrelloLoading(false);
+            }
+        }
+    };
+
+    const handleBoardChange = async (boardId: string) => {
+        setTrelloBoardId(boardId);
+        setTrelloLists([]);
+        setTrelloListId('');
+        try {
+            const lists = await getTrelloBoardLists(boardId);
+            setTrelloLists(lists);
+            if (lists.length > 0) setTrelloListId(lists[0].id);
+        } catch (err: any) {
+            setTrelloMsg({ type: 'err', text: err.message || 'Failed to load lists' });
+        }
+    };
+
+    const handleSyncTrello = async () => {
+        if (!trelloListId) return;
+        setTrelloSyncing(true);
+        setTrelloMsg(null);
+        try {
+            const res = await syncTasksToTrello(params.meetingId, trelloListId);
+            setTrelloMsg({ type: 'ok', text: res.message || `${res.synced_count} task(s) synced to Trello!` });
+            const fresh = await fetchMeeting(params.meetingId);
+            setTasks(fresh.tasks || []);
+        } catch (err: any) {
+            setTrelloMsg({ type: 'err', text: err.message || 'Trello sync failed' });
+        } finally {
+            setTrelloSyncing(false);
         }
     };
 
@@ -140,12 +265,101 @@ export default function MeetingDetailPage() {
                             {new Date(meeting.created_at).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
                         </p>
                     </div>
-                    <button onClick={() => exportTasksToCSV(tasks, meeting.title)} disabled={tasks.length === 0}
-                        className="inline-flex items-center gap-2 text-sm font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-md shadow-sm transition whitespace-nowrap disabled:opacity-40">
-                        <Download className="w-4 h-4" /> Export Tasks CSV
-                    </button>
+                    <div className="flex flex-wrap gap-3">
+                        {notionMsg && (
+                            <span className={cn(
+                                "inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-md border",
+                                notionMsg.type === 'ok' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-rose-50 text-rose-700 border-rose-100'
+                            )}>
+                                {notionMsg.type === 'ok' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+                                {notionMsg.text}
+                            </span>
+                        )}
+                        {emailMsg && (
+                            <span className={cn(
+                                "inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-md border",
+                                emailMsg.type === 'ok' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-rose-50 text-rose-700 border-rose-100'
+                            )}>
+                                {emailMsg.type === 'ok' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+                                {emailMsg.text}
+                            </span>
+                        )}
+                        <button onClick={handleEmailTasks} disabled={tasks.length === 0 || emailSending || meeting?.status !== 'completed'}
+                            className="inline-flex items-center gap-2 text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md shadow-sm transition whitespace-nowrap disabled:opacity-40">
+                            {emailSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                            {emailSending ? 'Sending...' : 'Email Assignees'}
+                        </button>
+                        <button onClick={handleOpenTrello} disabled={tasks.length === 0 || meeting?.status !== 'completed'}
+                            className={cn(
+                                "inline-flex items-center gap-2 text-sm font-semibold px-4 py-2 rounded-md shadow-sm transition whitespace-nowrap disabled:opacity-40",
+                                showTrello ? "bg-[#0052CC] text-white" : "bg-white border border-slate-200 hover:bg-slate-50 text-slate-700"
+                            )}>
+                            <LayoutList className="w-4 h-4" />
+                            Sync to Trello
+                            <ChevronDown className={cn("w-3.5 h-3.5 transition-transform", showTrello && "rotate-180")} />
+                        </button>
+                        <button onClick={handleNotionExport} disabled={tasks.length === 0 || notionExporting}
+                            className="inline-flex items-center gap-2 text-sm font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-md shadow-sm transition whitespace-nowrap disabled:opacity-40">
+                            {notionExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <BookOpen className="w-4 h-4" />}
+                            {notionExporting ? 'Exporting...' : 'Export to Notion'}
+                        </button>
+                        <button onClick={() => exportTasksToCSV(tasks, meeting.title)} disabled={tasks.length === 0}
+                            className="inline-flex items-center gap-2 text-sm font-semibold bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-md shadow-sm transition whitespace-nowrap disabled:opacity-40">
+                            <Download className="w-4 h-4" /> Export Tasks CSV
+                        </button>
+                    </div>
                 </div>
             </div>
+
+            {/* Trello Sync Panel */}
+            {showTrello && (
+                <div className="mb-6 p-5 bg-[#f0f4fc] border border-[#0052CC]/20 rounded-lg shadow-sm">
+                    <p className="text-xs font-bold uppercase tracking-widest text-[#0052CC] mb-4 flex items-center gap-2">
+                        <LayoutList className="w-4 h-4" /> Trello — Select destination
+                    </p>
+                    {trelloMsg && (
+                        <div className={cn(
+                            "mb-4 p-3 rounded-md text-xs font-medium flex items-center gap-2",
+                            trelloMsg.type === 'ok' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-rose-50 text-rose-700 border border-rose-100'
+                        )}>
+                            {trelloMsg.type === 'ok' ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 shrink-0" />}
+                            {trelloMsg.text}
+                        </div>
+                    )}
+                    {trelloLoading ? (
+                        <div className="flex items-center gap-2 text-sm text-slate-500">
+                            <Loader2 className="w-4 h-4 animate-spin" /> Loading boards...
+                        </div>
+                    ) : (
+                        <div className="flex flex-wrap items-end gap-3">
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-500 mb-1.5">Board</label>
+                                <select value={trelloBoardId} onChange={e => handleBoardChange(e.target.value)}
+                                    className="bg-white border border-slate-200 rounded-md px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-[#0052CC] min-w-50">
+                                    {trelloBoards.length === 0 && <option value="">No boards found</option>}
+                                    {trelloBoards.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-500 mb-1.5">List (Column)</label>
+                                <select value={trelloListId} onChange={e => setTrelloListId(e.target.value)}
+                                    className="bg-white border border-slate-200 rounded-md px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-[#0052CC] min-w-45">
+                                    {trelloLists.length === 0 && <option value="">Select a board first</option>}
+                                    {trelloLists.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                                </select>
+                            </div>
+                            <button onClick={handleSyncTrello} disabled={!trelloListId || trelloSyncing}
+                                className="inline-flex items-center gap-2 bg-[#0052CC] hover:bg-[#0747A6] text-white px-5 py-2 rounded-md text-sm font-semibold transition disabled:opacity-40">
+                                {trelloSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <LayoutList className="w-4 h-4" />}
+                                {trelloSyncing ? 'Syncing...' : 'Push Tasks to Trello'}
+                            </button>
+                        </div>
+                    )}
+                    <p className="mt-3 text-[11px] text-slate-400">
+                        Tasks already pushed (with a Trello link) will be skipped. Set each member's Trello username in the Workspace settings to auto-assign cards.
+                    </p>
+                </div>
+            )}
 
             {/* Task Stats Bar */}
             {tasks.length > 0 && (
@@ -282,8 +496,12 @@ export default function MeetingDetailPage() {
                                                     )}
                                                     {task.external_ticket_url && (
                                                         <a href={task.external_ticket_url} target="_blank" rel="noreferrer"
-                                                            className="text-xs text-blue-500 hover:underline flex items-center gap-1">
-                                                            <ExternalLink className="w-3 h-3" /> Ticket
+                                                            className={cn(
+                                                                "text-xs hover:underline flex items-center gap-1 font-medium",
+                                                                task.external_ticket_url.includes('trello.com') ? 'text-[#0052CC]' : 'text-purple-600'
+                                                            )}>
+                                                            <ExternalLink className="w-3 h-3" />
+                                                            {task.external_ticket_url.includes('trello.com') ? 'View in Trello' : 'View in Notion'}
                                                         </a>
                                                     )}
                                                 </div>

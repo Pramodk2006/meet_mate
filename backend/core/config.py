@@ -24,7 +24,14 @@ class Settings(BaseSettings):
 
     # Integrations
     NOTION_API_KEY: Optional[str] = None
+    NOTION_DATABASE_ID: Optional[str] = None
     TRELLO_API_KEY: Optional[str] = None
+    TRELLO_TOKEN: Optional[str] = None
+
+    # Email — SendGrid HTTP API (no SMTP ports needed, works on any network)
+    SENDGRID_API_KEY: Optional[str] = None
+    SMTP_FROM_NAME: str = "MeetMate"
+    SMTP_USER: Optional[str] = None  # used as the FROM email address
 
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
 
@@ -35,3 +42,4 @@ class Settings(BaseSettings):
         return f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
 
 settings = Settings()
+

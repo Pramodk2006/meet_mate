@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://localhost:8000/api/v1';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
 function getToken(): string | null {
     if (typeof window === 'undefined') return null;
@@ -62,8 +62,8 @@ export async function fetchWorkspaces() { return apiGet<any[]>('/workspaces/'); 
 export async function createWorkspace(name: string) { return apiPost<any>('/workspaces/', { name }); }
 export async function fetchWorkspace(id: string) { return apiGet<any>(`/workspaces/${id}`); }
 export async function fetchWorkspaceMembers(id: string) { return apiGet<any[]>(`/workspaces/${id}/members`); }
-export async function inviteMember(workspaceId: string, email: string) {
-    return apiPost<any>(`/workspaces/${workspaceId}/invite`, { email });
+export async function inviteMember(workspaceId: string, email: string, role: 'manager' | 'member' = 'member') {
+    return apiPost<any>(`/workspaces/${workspaceId}/invite`, { email, role });
 }
 
 // --- Meetings ---
@@ -124,3 +124,30 @@ export function exportTasksToCSV(tasks: any[], meetingTitle: string) {
     a.click();
     URL.revokeObjectURL(url);
 }
+
+// --- Tool Integrations ---
+export async function exportToNotion(meetingId: string) {
+    return apiPost<any>(`/export/${meetingId}/notion`, {});
+}
+
+export async function sendTaskEmails(meetingId: string) {
+    return apiPost<any>(`/export/${meetingId}/email-tasks`, {});
+}
+
+// --- Trello ---
+export async function getTrelloBoards() {
+    return apiGet<{ id: string; name: string }[]>('/export/trello/boards');
+}
+
+export async function getTrelloBoardLists(boardId: string) {
+    return apiGet<{ id: string; name: string }[]>(`/export/trello/boards/${boardId}/lists`);
+}
+
+export async function syncTasksToTrello(meetingId: string, listId: string) {
+    return apiPost<any>(`/export/${meetingId}/trello-tasks`, { list_id: listId });
+}
+
+export async function setMemberTrelloId(workspaceId: string, userId: string, trelloUsername: string) {
+    return apiPatch<any>(`/workspaces/${workspaceId}/members/${userId}/trello`, { trello_username: trelloUsername });
+}
+

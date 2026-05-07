@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: meetmate-backend
+    env: python
+    region: oregon
+    buildCommand: "cd backend && pip install -r requirements.txt && python create_db.py"
+    startCommand: "cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PROJECT_NAME
+        value: "MeetMate — AI Meeting Intelligence"
+      - key: POSTGRES_USER
+        sync: false
+      - key: POSTGRES_PASSWORD
+        sync: false
+      - key: POSTGRES_SERVER
+        sync: false
+      - key: POSTGRES_PORT
+        sync: false
+      - key: POSTGRES_DB
+        sync: false
+      - key: CLAUDE_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: SENDGRID_API_KEY
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_FROM_NAME
+        sync: false
